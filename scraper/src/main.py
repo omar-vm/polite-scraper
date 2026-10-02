@@ -1,6 +1,7 @@
 import requests
 from pathlib import Path
 import time
+from datetime import datetime, timezone
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
@@ -49,48 +50,86 @@ def fetch_html(url: str, filename: str) -> str:
 # ==========================================
 # Lógica de Extracción (Scraping)
 # ==========================================
-def discover_books() -> set[str]:
-    """Navega por las primeras 3 páginas del catálogo y extrae las URLs absolutas."""
+def discover_books() -> dict[str, str]:
+    """Retorna un diccionario {url_del_libro: url_de_origen}."""
     current_url = BASE_URL
     pages_visited = 0
-    discovered_urls = set()  # Usar 'set' elimina duplicados automáticamente
+    discovered_urls = {} # Usamos dict para guardar la URL de procedencia y evitar duplicados
     
     while current_url and pages_visited < 3:
         pages_visited += 1
         filename = f"catalogue-page-{pages_visited}.html"
         
-        # Obtener HTML
         html = fetch_html(current_url, filename)
         if not html:
             break
             
-        # Parsear con BeautifulSoup
         soup = BeautifulSoup(html, "html.parser")
         
-        # Extraer enlaces de los libros (están dentro de 'article.product_pod h3 a')
         for article in soup.select("article.product_pod"):
             link_tag = article.select_one("h3 a")
             if link_tag and 'href' in link_tag.attrs:
-                relative_url = link_tag['href']
-                # urljoin fusiona inteligentemente la ruta base con la relativa
-                absolute_url = urljoin(current_url, relative_url)
-                discovered_urls.add(absolute_url)
+                absolute_url = urljoin(current_url, link_tag['href'])
+                # Guardamos de qué página de catálogo provino este libro
+                discovered_urls[absolute_url] = current_url
         
-        # Buscar el enlace a la siguiente página ('li.next a')
         next_button = soup.select_one("li.next a")
         if next_button and 'href' in next_button.attrs:
-            next_relative = next_button['href']
-            current_url = urljoin(current_url, next_relative)
+            current_url = urljoin(current_url, next_button['href'])
         else:
-            current_url = None  # No hay más páginas
+            current_url = None
             
-    # Resultados del Checkpoint
-    print(f"catalogue_pages = {pages_visited}")
-    print(f"discovered = {len(discovered_urls)}")
-    print(f"unique_urls = {len(discovered_urls)}")
-    
     return discovered_urls
 
+def extract_book_details(book_url: str, source_page: str) -> dict:
+    """Extrae los 8 campos requeridos de la página de detalle de un libro."""
+    book_id = book_url.split('/')[-2]
+    filename = f"book-{book_id}.html"
+    
+    html = fetch_html(book_url, filename)
+    if not html:
+        return {}
+
+    soup = BeautifulSoup(html, "html.parser")
+    
+    product_main = soup.select_one("div.product_main")
+    
+    title = product_main.select_one("h1").text if product_main and product_main.select_one("h1") else None
+    price_text = product_main.select_one("p.price_color").text if product_main else None
+    
+    availability_tag = product_main.select_one("p.availability") if product_main else None
+    availability_text = availability_tag.text.strip() if availability_tag else None
+    
+    rating_tag = product_main.select_one("p.star-rating") if product_main else None
+    rating_text = rating_tag["class"][1] if rating_tag and len(rating_tag["class"]) > 1 else None
+
+    description_tag = soup.select_one("#product_description ~ p")
+    description = description_tag.text if description_tag else None
+
+    return {
+        "title": title,
+        "product_url": book_url,
+        "price_text": price_text,
+        "availability_text": availability_text,
+        "rating_text": rating_text,
+        "description": description,
+        "source_page": source_page,
+        "fetched_at": datetime.now(timezone.utc).isoformat()
+    }
 
 if __name__ == "__main__":
-    book_urls = discover_books()
+    books_dict = discover_books()
+    
+    raw_records = []
+    print("\nIniciando extracción de detalles...")
+    
+    for book_url, source_page in books_dict.items():
+        record = extract_book_details(book_url, source_page)
+        if record:
+            raw_records.append(record)
+
+    print("\n--- EJEMPLO DE REGISTRO CRUDO ---")
+    import json
+    print(json.dumps(raw_records[0], indent=2, ensure_ascii=False))
+    
+    print(f"\ndetail_pages = {len(raw_records)}")
