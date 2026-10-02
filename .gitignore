@@ -1,3 +1,7 @@
+
+# Virtual enviroment
 .venv
-/scraper/cache
-/cache
+
+# Local scraping cache
+cache/
+output/
